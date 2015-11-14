@@ -4,13 +4,13 @@ import sys
 import time
 import socket
 
-default_udp_port    = 10000
-loopback_address    = '127.0.0.1'
-default_filename    = 'input.txt'
-block_size          = 500 - 20 - 8
-seq_mask            = 0xffffffffffff
-handshake_message   = 'yo'
-default_wait_time   = 2
+default_udp_port                       = 10000
+loopback_address                       = '127.0.0.1'
+default_filename                       = 'input.txt'
+block_size                             = 500 - 20 - 8
+seq_mask                               = 0xffffffffffff
+handshake_message                      = 'yo'
+default_wait_time                      = 2
 
 
 class Packet(object):
@@ -68,12 +68,29 @@ def handshake(relay_socket, ip_port=(loopback_address, default_udp_port)):
     return False
 
 
+def send_queued_packets(packets_dictionary, relay_socket, ip_port):
+    for packet in packets_dictionary:
+        packet.send_packet(relay_socket, ip_port)
+
+
 def main():
     relay_ip_address = sys.argv[1]
     sock = init_socket()
-    connection_established = handshake(sock, (relay_ip_address, default_udp_port))
 
+    fragmented_data = read_file_and_fragment_data()
+
+    connection_established = handshake(sock, (relay_ip_address, default_udp_port))
     if not connection_established:
         print '[!] Was unable to establish connection with relay server...'
         sys.exit()
 
+    i = 0
+    packets = {}
+    for fragment in fragmented_data:
+        packet = Packet(i, fragment)
+        packets[i] = packet
+
+    done = False
+    while not done:
+        send_queued_packets(packets, relay_socket=sock, ip_port=(relay_ip_address, default_udp_port))
+        last_received_packet = sock.recvfrom(1024)[0]
