@@ -9,25 +9,24 @@ import struct
 default_udp_port                       = 10000
 loopback_address                       = '127.0.0.1'
 default_filename                       = 'input.txt'
-block_size                             = 500 - 20 - 8
+block_size                             = 500 - 20 - 8 - 2
 received_buffer_size                   = 20 + 8 + 4
-seq_mask                               = 0xffffffffff
-payload_prefix                         = -0xaabbccdd
 handshake_message                      = 'yo'
 default_wait_time                      = 2
 handshake_word                         = 'hello'
 
 
 class Packet(object):
-    def __init__(self, seq_number, data):
+    def __init__(self, seq_number, data, number_of_fragments):
         self.__sequence_number = seq_number
         self.__raw_data = data
+        self.__number_of_fragments = number_of_fragments
         self.__data = None
         self._generate_payload()
 
     def _generate_payload(self):
-        seq_header = seq_mask ^ self.__sequence_number
-        self.__data = struct.pack('ls', seq_header, self.__raw_data)
+        packet_header = struct.pack('BB', self.__number_of_fragments, self.__sequence_number)
+        self.__data = packet_header + self.__raw_data
 
     def send_packet(self, relay_socket, ip_port=(loopback_address, default_udp_port)):
         relay_socket.send_to(self.__data, ip_port)
@@ -43,10 +42,6 @@ def read_file_and_fragment_data():
         data = f.read(block_size)
         i += 1
     return fragmented_data
-
-
-def extract_sequence_number(packet_data):
-    return packet_data ^ seq_mask
 
 
 def init_socket():
@@ -78,14 +73,6 @@ def send_queued_packets(packets_dictionary, relay_socket, ip_port):
         packet.send_packet(relay_socket, ip_port)
 
 
-def notify_satellite_number_of_fragments(number_of_fragments, relay_socket, ip_port=(loopback_address, default_udp_port)):
-    payload = struct.pack('li', payload_prefix, number_of_fragments)
-
-    relay_socket.setblocking(1)
-    relay_socket.sendto(payload, ip_port)
-    relay_socket.settimeout()
-
-
 def main():
     relay_ip_address = sys.argv[0]
     sock = init_socket()
@@ -99,8 +86,9 @@ def main():
 
     i = 0
     packets = {}
+    fragment_size = len(fragmented_data)
     for fragment in fragmented_data:
-        packet = Packet(i, fragment)
+        packet = Packet(i, fragment, fragment_size)
         packets[i] = packet
 
     done = False
@@ -110,14 +98,11 @@ def main():
             send_queued_packets(packets, relay_socket=sock, ip_port=(relay_ip_address, default_udp_port))
             retransmit = False
             timestamp = time.time()
-        last_received_packet = sock.recvfrom(received_buffer_size)[0]
+        last_received_packet_raw = sock.recvfrom(received_buffer_size)[0]
+        last_received_ack = struct.unpack('B', last_received_packet_raw)
 
-        try:
-            last_received_ack = int(last_received_packet)
-        except ValueError:
-            print '[!] Was unable to cast received ack into int. WRONG PACKET!'
-            sys.exit()
-
-        del packets[last_received_packet]
+        del packets[last_received_ack]
         if time.time() - timestamp > default_wait_time:
             retransmit = False
+        if not packets:
+            done = True
